@@ -1,0 +1,7 @@
+backend/.env
+backend/venv/
+backend/saas_data.db
+backend/__pycache__/
+node_modules/
+frontend/node_modules/
+.DS_Store

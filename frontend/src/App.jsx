@@ -343,7 +343,7 @@ function App() {
                 <Bot className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold gradient-text">SaaS Co-Pilot</h1>
+                <h1 className="text-xl font-bold gradient-text">AILytics</h1>
                 <p className="text-xs text-gray-500">AI-Powered Business Analyst</p>
               </div>
             </div>
@@ -556,8 +556,8 @@ function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex items-center justify-between">
             <p className="text-xs text-gray-500">
-              © 2024 SaaS Co-Pilot. Powered by Groq AI.
-            </p>
+              © 2024 AILytics. Powered by Groq AI.
+            </p> 
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-green-500 pulse-dot" />
               <p className="text-xs text-gray-500">System Operational</p>

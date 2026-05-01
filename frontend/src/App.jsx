@@ -6,7 +6,8 @@ import {
 import {
   Bot, AlertTriangle, AlertCircle, Info, Send, RefreshCw,
   TrendingUp, Users, DollarSign, Activity, Sparkles,
-  ChevronDown, ChevronUp, MessageSquare, BarChart3
+  ChevronDown, ChevronUp, MessageSquare, BarChart3,
+  Upload, FileSpreadsheet, X, CheckCircle
 } from 'lucide-react'
 
 const API_BASE_URL = 'http://localhost:8000'
@@ -253,9 +254,20 @@ function App() {
   const [recentQueries, setRecentQueries] = useState([])
   const [digest, setDigest] = useState(null)
   const [showDigest, setShowDigest] = useState(false)
-  const [loading, setLoading] = useState({ anomalies: false, ask: false, digest: false })
+  const [loading, setLoading] = useState({ anomalies: false, ask: false, digest: false, upload: false, askCsv: false })
   const [error, setError] = useState(null)
   const chatEndRef = useRef(null)
+  const fileInputRef = useRef(null)
+
+  // CSV Upload state
+  const [csvData, setCsvData] = useState(null)
+  const [csvPreview, setCsvPreview] = useState(null)
+  const [csvColumns, setCsvColumns] = useState([])
+  const [csvQuestion, setCsvQuestion] = useState('')
+  const [csvQueryResult, setCsvQueryResult] = useState(null)
+  const [csvRecentQueries, setCsvRecentQueries] = useState([])
+  const [csvError, setCsvError] = useState(null)
+  const [activeTab, setActiveTab] = useState('demo') // 'demo' or 'upload'
 
   // Load anomalies on mount
   useEffect(() => {
@@ -331,6 +343,123 @@ function App() {
     "What are the most used features?",
     "How many clients do we have by country?"
   ]
+
+  const csvSampleQuestions = [
+    "What is the average value by category?",
+    "Show me the top 5 items by sales",
+    "What is the total count by group?",
+    "Show me trends over time"
+  ]
+
+  // CSV Upload handler
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    if (!file.name.endsWith('.csv')) {
+      setCsvError('Please upload a CSV file')
+      return
+    }
+
+    setLoading(prev => ({ ...prev, upload: true }))
+    setCsvError(null)
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/upload-csv`, {
+        method: 'POST',
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Upload failed')
+      }
+
+      const data = await response.json()
+      setCsvData(data)
+      setCsvPreview(data.preview)
+      setCsvColumns(data.columns)
+      setCsvQueryResult(null)
+      setCsvRecentQueries([])
+    } catch (err) {
+      console.error('Error uploading file:', err)
+      setCsvError(err.message || 'Failed to upload file')
+    } finally {
+      setLoading(prev => ({ ...prev, upload: false }))
+    }
+  }
+
+  // CSV Ask handler
+  const handleCsvAsk = async (e) => {
+    e.preventDefault()
+    if (!csvQuestion.trim() || loading.askCsv) return
+
+    setLoading(prev => ({ ...prev, askCsv: true }))
+    setCsvError(null)
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/ask-csv`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: csvQuestion })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Query failed')
+      }
+
+      const data = await response.json()
+      setCsvQueryResult(data)
+
+      setCsvRecentQueries(prev => [
+        { question: csvQuestion, result: data, timestamp: new Date().toISOString() },
+        ...prev.slice(0, 4)
+      ])
+
+      setCsvQuestion('')
+    } catch (err) {
+      console.error('Error asking question:', err)
+      setCsvError(err.message || 'Failed to process your question')
+    } finally {
+      setLoading(prev => ({ ...prev, askCsv: false }))
+    }
+  }
+
+  // Clear CSV data
+  const clearCsvData = () => {
+    setCsvData(null)
+    setCsvPreview(null)
+    setCsvColumns([])
+    setCsvQueryResult(null)
+    setCsvRecentQueries([])
+    setCsvError(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  // Check CSV status on mount
+  const checkCsvStatus = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/csv-status`)
+      const data = await response.json()
+      if (data.uploaded) {
+        setCsvData({ columns: data.columns.map(c => c.name), preview: data.preview, row_count: data.row_count })
+        setCsvPreview(data.preview)
+        setCsvColumns(data.columns.map(c => c.name))
+      }
+    } catch (err) {
+      console.error('Error checking CSV status:', err)
+    }
+  }
+
+  useEffect(() => {
+    checkCsvStatus()
+  }, [])
 
   return (
     <div className="min-h-screen bg-background">
@@ -545,6 +674,201 @@ function App() {
           </div>
         </div>
       </main>
+
+      {/* CSV Upload Section */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
+        <div className="glass rounded-xl p-6 border-t-2 border-primary/30">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-accent to-primary flex items-center justify-center">
+                <FileSpreadsheet className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-200">Upload Your Data</h2>
+                <p className="text-xs text-gray-500">Upload a CSV file and ask questions about your data</p>
+              </div>
+            </div>
+            {csvData && (
+              <button
+                onClick={clearCsvData}
+                className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400 hover:bg-red-500/20 transition-colors"
+              >
+                <X className="w-4 h-4" />
+                Clear
+              </button>
+            )}
+          </div>
+
+          {!csvData ? (
+            // Upload Area
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-gray-700 rounded-xl p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all group"
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              {loading.upload ? (
+                <div className="flex flex-col items-center gap-3">
+                  <div className="spinner" />
+                  <p className="text-gray-400 text-sm">Uploading and processing...</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                    <Upload className="w-8 h-8 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-gray-300 font-medium">Click to upload CSV file</p>
+                    <p className="text-gray-500 text-sm mt-1">or drag and drop your file here</p>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-2">Only .csv files are supported</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            // CSV Data Display
+            <div className="space-y-6">
+              {/* Upload Success & Column Info */}
+              <div className="flex items-center gap-2 text-green-400">
+                <CheckCircle className="w-5 h-5" />
+                <span className="text-sm font-medium">
+                  {csvData.message}
+                </span>
+              </div>
+
+              {/* Column Tags */}
+              <div>
+                <p className="text-xs text-gray-500 mb-2 font-medium">Detected Columns:</p>
+                <div className="flex flex-wrap gap-2">
+                  {csvColumns.map((col, index) => (
+                    <span
+                      key={index}
+                      className="px-3 py-1 bg-primary/10 border border-primary/30 rounded-full text-xs text-primary font-mono"
+                    >
+                      {col}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preview Table */}
+              {csvPreview && csvPreview.length > 0 && (
+                <div>
+                  <p className="text-xs text-gray-500 mb-2 font-medium">Preview (first 5 rows):</p>
+                  <div className="overflow-x-auto rounded-lg border border-gray-700">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-background-card">
+                          {csvColumns.map((col, index) => (
+                            <th key={index} className="px-4 py-3 text-left text-gray-300 font-medium border-b border-gray-700">
+                              {col}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {csvPreview.map((row, rowIndex) => (
+                          <tr key={rowIndex} className="hover:bg-background-secondary/50 transition-colors">
+                            {csvColumns.map((col, colIndex) => (
+                              <td key={colIndex} className="px-4 py-3 text-gray-400 border-b border-gray-800">
+                                {row[col] !== null ? String(row[col]) : '-'}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* CSV Chat Input */}
+              <div className="border-t border-gray-700 pt-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <MessageSquare className="w-5 h-5 text-accent" />
+                  <h3 className="text-md font-semibold text-gray-200">Ask questions about your uploaded data</h3>
+                </div>
+
+                <form onSubmit={handleCsvAsk} className="relative">
+                  <input
+                    type="text"
+                    value={csvQuestion}
+                    onChange={(e) => setCsvQuestion(e.target.value)}
+                    placeholder="E.g., What is the average sales by region?"
+                    className="w-full bg-background-secondary border border-gray-700 rounded-xl px-5 py-4 pr-14 text-gray-200 placeholder-gray-500 input-glow transition-all"
+                  />
+                  <button
+                    type="submit"
+                    disabled={loading.askCsv || !csvQuestion.trim()}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-accent rounded-lg flex items-center justify-center hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading.askCsv ? (
+                      <div className="spinner w-4 h-4" />
+                    ) : (
+                      <Send className="w-4 h-4 text-white" />
+                    )}
+                  </button>
+                </form>
+
+                {/* CSV Sample Questions */}
+                <div className="mt-4">
+                  <p className="text-xs text-gray-500 mb-2">Try these examples:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {csvSampleQuestions.map((q, index) => (
+                      <button
+                        key={index}
+                        onClick={() => setCsvQuestion(q)}
+                        className="px-3 py-1.5 bg-background-card border border-gray-700 rounded-lg text-xs text-gray-400 hover:border-accent/50 hover:text-gray-200 transition-colors"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* CSV Query Result */}
+                {csvQueryResult && (
+                  <div className="mt-6">
+                    <QueryResultCard result={csvQueryResult} question={csvRecentQueries[0]?.question || csvQuestion} />
+                  </div>
+                )}
+
+                {/* CSV Recent Queries */}
+                {csvRecentQueries.length > 0 && !csvQueryResult && (
+                  <div className="mt-4">
+                    <p className="text-xs text-gray-500 mb-2">Recent queries:</p>
+                    <div className="space-y-2">
+                      {csvRecentQueries.map((query, index) => (
+                        <div
+                          key={index}
+                          className="p-3 bg-background-secondary rounded-lg border border-gray-800 cursor-pointer hover:border-accent/30 transition-colors"
+                          onClick={() => setCsvQueryResult(query.result)}
+                        >
+                          <p className="text-sm text-gray-300">{query.question}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {csvError && (
+            <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+                <p className="text-red-400 text-sm">{csvError}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Digest Modal */}
       {showDigest && digest && (

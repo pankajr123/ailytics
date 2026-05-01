@@ -8,12 +8,15 @@ import sqlite3
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from groq import Groq
+import pandas as pd
+import io
+import csv
 
 from database import init_db
 
@@ -568,6 +571,238 @@ def get_revenue_summary():
         }
         for row in result
     ]
+
+
+class CSVUploadResponse(BaseModel):
+    columns: List[str]
+    preview: List[Dict[str, Any]]
+    row_count: int
+    message: str
+
+
+@app.post("/upload-csv", response_model=CSVUploadResponse)
+async def upload_csv(file: UploadFile = File(...)):
+    """
+    Upload a CSV file, parse it, and store in uploaded_data table
+    """
+    # Validate file extension
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+    
+    try:
+        # Read and parse CSV
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        
+        # Clean column names (remove special characters, spaces)
+        df.columns = [col.strip().replace(' ', '_').replace('-', '_') for col in df.columns]
+        
+        # Drop existing uploaded_data table and recreate
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS uploaded_data")
+        
+        # Store in SQLite
+        df.to_sql('uploaded_data', conn, if_exists='fail', index=False)
+        conn.commit()
+        
+        # Get preview (first 5 rows)
+        preview_df = df.head(5)
+        preview = preview_df.to_dict(orient='records')
+        
+        # Convert any non-serializable types
+        for row in preview:
+            for key, value in row.items():
+                if pd.isna(value):
+                    row[key] = None
+                elif isinstance(value, (pd.Timestamp, datetime)):
+                    row[key] = str(value)
+        
+        conn.close()
+        
+        return CSVUploadResponse(
+            columns=list(df.columns),
+            preview=preview,
+            row_count=len(df),
+            message=f"Successfully uploaded {len(df)} rows with {len(df.columns)} columns"
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing CSV: {str(e)}")
+
+
+@app.post("/ask-csv", response_model=AIResponse)
+def ask_csv_question(request: QuestionRequest):
+    """
+    Convert natural language question to SQL query on uploaded CSV data
+    """
+    # Check if uploaded_data table exists
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="No CSV data uploaded. Please upload a CSV file first.")
+    
+    # Get schema info from uploaded_data
+    cur.execute("PRAGMA table_info(uploaded_data)")
+    columns_info = cur.fetchall()
+    columns = [(col[1], col[2]) for col in columns_info]  # (name, type)
+    
+    # Get sample data for context
+    cur.execute("SELECT * FROM uploaded_data LIMIT 3")
+    sample_rows = cur.fetchall()
+    column_names = [desc[0] for desc in cur.description]
+    
+    conn.close()
+    
+    # Build schema info for AI
+    schema_info = f"""
+    Uploaded CSV Data Schema (table: uploaded_data):
+    Columns: {', '.join([f'{col[0]} ({col[1]})' for col in columns])}
+    
+    Sample data:
+    {chr(10).join([str(dict(zip(column_names, row))) for row in sample_rows])}
+    
+    Example questions you can answer:
+    - "What is the average of [numeric_column]?"
+    - "Show me the count by [category_column]"
+    - "What are the top 5 [column] by [numeric_column]?"
+    - "Show me the trend of [numeric_column] over [date_column]"
+    """
+    
+    system_prompt = """You are a SQL expert that converts natural language questions into SQLite queries.
+    Return your response in the following JSON format:
+    {
+        "sql": "SELECT ...",
+        "insight": "Brief insight about what this query shows (2-3 sentences)"
+    }
+    
+    Rules:
+    1. Only use the 'uploaded_data' table
+    2. Use proper SQL syntax for SQLite
+    3. Always include meaningful column aliases
+    4. Keep queries simple and efficient
+    5. Do not include any markdown formatting in the JSON
+    6. Use the exact column names from the schema"""
+    
+    prompt = f"""Based on the uploaded CSV data schema below, convert this question into a SQL query:
+    
+    Question: {request.question}
+    
+    {schema_info}
+    
+    Return only valid JSON with 'sql' and 'insight' keys."""
+    
+    response = ask_groq(prompt, system_prompt)
+    
+    # Parse the AI response
+    try:
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            ai_result = json.loads(json_match.group())
+        else:
+            ai_result = json.loads(response)
+    except (json.JSONDecodeError, AttributeError):
+        ai_result = {
+            "sql": "SELECT * FROM uploaded_data LIMIT 10",
+            "insight": "Could not parse the question. Here's a sample query."
+        }
+    
+    sql_query = ai_result.get("sql", "SELECT 1")
+    insight = ai_result.get("insight", "Query executed")
+    
+    # Clean up SQL (remove markdown code blocks if present)
+    sql_query = re.sub(r'```sql\s*|\s*```', '', sql_query).strip()
+    
+    # Execute the query
+    rows = []
+    columns = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(sql_query)
+        rows = [dict(r) for r in cur.fetchall()]
+        if rows:
+            columns = list(rows[0].keys())
+        conn.close()
+    except Exception as e:
+        insight = f"Error executing query: {str(e)}. Please rephrase your question."
+    
+    # Determine chart type
+    chart_type = determine_chart_type(rows, columns)
+    
+    # Prepare data for frontend
+    if rows:
+        if len(columns) >= 2:
+            labels = [str(row[columns[0]]) for row in rows]
+            values = []
+            for col in columns[1:]:
+                try:
+                    values = [float(row[col]) for row in rows]
+                    break
+                except (ValueError, TypeError):
+                    continue
+            if not values:
+                values = [1] * len(rows)
+        else:
+            labels = [str(list(row.values())[0]) for row in rows]
+            values = [1] * len(rows)
+        
+        chart_data = {
+            "labels": labels,
+            "values": values,
+            "raw_data": rows
+        }
+    else:
+        chart_data = {
+            "labels": [],
+            "values": [],
+            "raw_data": []
+        }
+    
+    return AIResponse(
+        sql=sql_query,
+        chart_type=chart_type,
+        insight=insight,
+        data=chart_data
+    )
+
+
+@app.get("/csv-status")
+def get_csv_status():
+    """Check if CSV data has been uploaded"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+    exists = cur.fetchone() is not None
+    
+    if exists:
+        cur.execute("SELECT COUNT(*) FROM uploaded_data")
+        row_count = cur.fetchone()[0]
+        
+        cur.execute("PRAGMA table_info(uploaded_data)")
+        columns = [(col[1], col[2]) for col in cur.fetchall()]
+        
+        cur.execute("SELECT * FROM uploaded_data LIMIT 5")
+        preview_rows = cur.fetchall()
+        column_names = [desc[0] for desc in cur.description]
+        preview = [dict(zip(column_names, row)) for row in preview_rows]
+        
+        conn.close()
+        
+        return {
+            "uploaded": True,
+            "row_count": row_count,
+            "columns": [{"name": col[0], "type": col[1]} for col in columns],
+            "preview": preview
+        }
+    
+    conn.close()
+    return {"uploaded": False}
 
 
 if __name__ == "__main__":

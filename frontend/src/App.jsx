@@ -269,11 +269,6 @@ function App() {
   const [csvError, setCsvError] = useState(null)
   const [activeTab, setActiveTab] = useState('demo') // 'demo' or 'upload'
 
-  // Load anomalies on mount
-  useEffect(() => {
-    fetchAnomalies()
-  }, [])
-
   const fetchAnomalies = async () => {
     setLoading(prev => ({ ...prev, anomalies: true }))
     try {
@@ -429,37 +424,41 @@ function App() {
     }
   }
 
-  // Clear CSV data
-  const clearCsvData = () => {
-    setCsvData(null)
-    setCsvPreview(null)
-    setCsvColumns([])
-    setCsvQueryResult(null)
-    setCsvRecentQueries([])
-    setCsvError(null)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }
-
-  // Check CSV status on mount
-  const checkCsvStatus = async () => {
+  // Clear CSV data (calls backend to drop table)
+  const clearCsvData = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/csv-status`)
-      const data = await response.json()
-      if (data.uploaded) {
-        setCsvData({ columns: data.columns.map(c => c.name), preview: data.preview, row_count: data.row_count })
-        setCsvPreview(data.preview)
-        setCsvColumns(data.columns.map(c => c.name))
+      const response = await fetch(`${API_BASE_URL}/clear-csv`, {
+        method: 'DELETE'
+      })
+      if (response.ok) {
+        setCsvData(null)
+        setCsvPreview(null)
+        setCsvColumns([])
+        setCsvQueryResult(null)
+        setCsvRecentQueries([])
+        setCsvError(null)
+        setAnomalies([])
+        setAiAnalysis('')
+        if (fileInputRef.current) {
+          fileInputRef.current.value = ''
+        }
       }
     } catch (err) {
-      console.error('Error checking CSV status:', err)
+      console.error('Error clearing data:', err)
+      // Still reset local state even if backend call fails
+      setCsvData(null)
+      setCsvPreview(null)
+      setCsvColumns([])
+      setCsvQueryResult(null)
+      setCsvRecentQueries([])
+      setCsvError(null)
+      setAnomalies([])
+      setAiAnalysis('')
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
     }
   }
-
-  useEffect(() => {
-    checkCsvStatus()
-  }, [])
 
   return (
     <div className="min-h-screen bg-background">
@@ -527,7 +526,7 @@ function App() {
           ) : (
             <div className="glass rounded-xl p-6 text-center text-gray-500">
               <Info className="w-8 h-8 mx-auto mb-2 text-gray-600" />
-              <p>No anomalies detected. Your business is running smoothly!</p>
+              <p>Upload your data to see AI-detected anomalies</p>
             </div>
           )}
 

@@ -41,7 +41,9 @@ DB_PATH = "saas_data.db"
 
 def get_db_connection():
     """Get a database connection using raw sqlite3"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -50,7 +52,9 @@ def execute_sql_query(query: str) -> Dict[str, Any]:
     """Execute SQL query and return results using raw sqlite3"""
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute(query)
@@ -218,7 +222,9 @@ def ask_question(request: QuestionRequest):
     rows = []
     columns = []
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute(sql_query)
@@ -278,39 +284,44 @@ def get_weekly_digest():
     """
     Generate a weekly business health summary using AI
     """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    # Gather statistics using raw SQL
-    cur.execute("SELECT COUNT(*) FROM clients")
-    total_clients = cur.fetchone()[0]
-    
-    cur.execute("SELECT plan, COUNT(*) FROM clients GROUP BY plan")
-    clients_by_plan = cur.fetchall()
-    
-    cur.execute("SELECT SUM(amount) FROM revenue")
-    total_revenue = cur.fetchone()[0] or 0
-    
-    cur.execute("SELECT month, SUM(amount) FROM revenue GROUP BY month ORDER BY month")
-    monthly_revenue = cur.fetchall()
-    
-    cur.execute("SELECT SUM(amount) FROM revenue WHERE status = 'unpaid'")
-    unpaid_revenue = cur.fetchone()[0] or 0
-    
-    cur.execute("SELECT COUNT(*) FROM support_tickets")
-    total_tickets = cur.fetchone()[0]
-    
-    cur.execute("SELECT priority, COUNT(*) FROM support_tickets GROUP BY priority")
-    tickets_by_priority = cur.fetchall()
-    
-    cur.execute("SELECT COUNT(*) FROM support_tickets WHERE status IN ('open', 'in_progress')")
-    open_tickets = cur.fetchone()[0]
-    
-    cur.execute("SELECT feature, SUM(usage_count) FROM usage_logs GROUP BY feature ORDER BY SUM(usage_count) DESC LIMIT 5")
-    top_features = cur.fetchall()
-    
-    conn.close()
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        # Gather statistics using raw SQL
+        cur.execute("SELECT COUNT(*) FROM clients")
+        total_clients = cur.fetchone()[0]
+        
+        cur.execute("SELECT plan, COUNT(*) FROM clients GROUP BY plan")
+        clients_by_plan = cur.fetchall()
+        
+        cur.execute("SELECT SUM(amount) FROM revenue")
+        total_revenue = cur.fetchone()[0] or 0
+        
+        cur.execute("SELECT month, SUM(amount) FROM revenue GROUP BY month ORDER BY month")
+        monthly_revenue = cur.fetchall()
+        
+        cur.execute("SELECT SUM(amount) FROM revenue WHERE status = 'unpaid'")
+        unpaid_revenue = cur.fetchone()[0] or 0
+        
+        cur.execute("SELECT COUNT(*) FROM support_tickets")
+        total_tickets = cur.fetchone()[0]
+        
+        cur.execute("SELECT priority, COUNT(*) FROM support_tickets GROUP BY priority")
+        tickets_by_priority = cur.fetchall()
+        
+        cur.execute("SELECT COUNT(*) FROM support_tickets WHERE status IN ('open', 'in_progress')")
+        open_tickets = cur.fetchone()[0]
+        
+        cur.execute("SELECT feature, SUM(usage_count) FROM usage_logs GROUP BY feature ORDER BY SUM(usage_count) DESC LIMIT 5")
+        top_features = cur.fetchall()
+    finally:
+        if conn:
+            conn.close()
     
     # Format stats for AI
     stats_text = f"""
@@ -358,182 +369,127 @@ def get_weekly_digest():
 @app.get("/anomalies")
 def detect_anomalies():
     """
-    Detect business anomalies and risks from current data
+    Detect business anomalies and risks from uploaded CSV data using AI
     """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    anomalies = []
-    
-    # Check for high unpaid revenue
-    cur.execute("SELECT SUM(amount) FROM revenue")
-    total_revenue = cur.fetchone()[0] or 0
-    
-    cur.execute("SELECT SUM(amount) FROM revenue WHERE status = 'unpaid'")
-    unpaid_revenue = cur.fetchone()[0] or 0
-    unpaid_percentage = (unpaid_revenue / total_revenue * 100) if total_revenue > 0 else 0
-    
-    if unpaid_percentage > 10:
-        anomalies.append({
-            "type": "warning",
-            "title": "High Unpaid Revenue",
-            "description": f"Unpaid revenue is ${unpaid_revenue:,.2f} ({unpaid_percentage:.1f}% of total). This is above the 10% threshold.",
-            "metric": f"${unpaid_revenue:,.2f} unpaid"
-        })
-    
-    # Check for clients with many open support tickets
-    cur.execute("""
-        SELECT c.name, COUNT(st.id) as ticket_count
-        FROM clients c
-        JOIN support_tickets st ON c.id = st.client_id
-        WHERE st.status IN ('open', 'in_progress')
-        GROUP BY c.id
-        HAVING COUNT(st.id) >= 3
-    """)
-    clients_with_tickets = cur.fetchall()
-    
-    for row in clients_with_tickets:
-        client_name = row[0]
-        count = row[1]
-        anomalies.append({
-            "type": "critical" if count >= 5 else "warning",
-            "title": f"Multiple Open Tickets: {client_name}",
-            "description": f"This client has {count} open/in-progress support tickets. Consider proactive outreach.",
-            "metric": f"{count} open tickets"
-        })
-    
-    # Check for revenue decline
-    cur.execute("""
-        SELECT month, SUM(amount) as total
-        FROM revenue
-        GROUP BY month
-        ORDER BY month
-    """)
-    monthly_revenue = cur.fetchall()
-    
-    if len(monthly_revenue) >= 2:
-        last_month = monthly_revenue[-1][1]
-        prev_month = monthly_revenue[-2][1]
-        if prev_month > 0:
-            change = ((last_month - prev_month) / prev_month) * 100
-            if change < -15:
-                anomalies.append({
-                    "type": "critical",
-                    "title": "Revenue Decline Detected",
-                    "description": f"Revenue decreased by {abs(change):.1f}% from {monthly_revenue[-2][0]} to {monthly_revenue[-1][0]}. Investigate potential causes.",
-                    "metric": f"{change:.1f}% change"
-                })
-            elif change < -5:
-                anomalies.append({
-                    "type": "warning",
-                    "title": "Slight Revenue Decline",
-                    "description": f"Revenue decreased by {abs(change):.1f}% from {monthly_revenue[-2][0]} to {monthly_revenue[-1][0]}. Monitor closely.",
-                    "metric": f"{change:.1f}% change"
-                })
-    
-    # Check for high-priority unresolved tickets
-    cur.execute("""
-        SELECT COUNT(*) FROM support_tickets
-        WHERE priority = 'High' AND status IN ('open', 'in_progress')
-    """)
-    high_priority_open = cur.fetchone()[0]
-    
-    if high_priority_open > 0:
-        anomalies.append({
-            "type": "critical",
-            "title": "High Priority Tickets Pending",
-            "description": f"There are {high_priority_open} high-priority support tickets that are still open or in progress.",
-            "metric": f"{high_priority_open} tickets"
-        })
-    
-    # Check for clients with declining usage
-    current_month = "2024-06"
-    prev_month_val = "2024-05"
-    
-    cur.execute("""
-        SELECT c.name, SUM(ul.usage_count) as current_usage
-        FROM clients c
-        JOIN usage_logs ul ON c.id = ul.client_id
-        WHERE ul.month = ?
-        GROUP BY c.id
-    """, (current_month,))
-    declining_clients = cur.fetchall()
-    
-    cur.execute("""
-        SELECT c.name, SUM(ul.usage_count) as prev_usage
-        FROM clients c
-        JOIN usage_logs ul ON c.id = ul.client_id
-        WHERE ul.month = ?
-        GROUP BY c.id
-    """, (prev_month_val,))
-    prev_usage = cur.fetchall()
-    
-    prev_usage_dict = {row[0]: row[1] for row in prev_usage}
-    
-    for row in declining_clients:
-        client_name = row[0]
-        current = row[1]
-        if client_name in prev_usage_dict:
-            prev = prev_usage_dict[client_name]
-            if prev > 0:
-                decline = ((current - prev) / prev) * 100
-                if decline < -30:
-                    anomalies.append({
-                        "type": "warning",
-                        "title": f"Usage Decline: {client_name}",
-                        "description": f"Client usage dropped by {abs(decline):.1f}% from {prev_month_val} to {current_month}. Risk of churn.",
-                        "metric": f"{decline:.1f}% decline"
-                    })
-    
-    # Ensure we have at least 3 anomalies for demo purposes
-    if len(anomalies) < 3:
-        # Add some informational items
-        cur.execute("SELECT COUNT(*) FROM clients WHERE plan = 'Starter'")
-        starter_clients = cur.fetchone()[0]
-        if starter_clients > 0:
-            anomalies.append({
-                "type": "info",
-                "title": "Upgrade Opportunities",
-                "description": f"There are {starter_clients} Starter plan clients that could be targeted for upselling to Pro.",
-                "metric": f"{starter_clients} clients"
-            })
-    
-    conn.close()
-    
-    # Use AI to analyze and prioritize anomalies
-    if anomalies and groq_client:
-        anomaly_text = "\n".join([f"- {a['title']}: {a['description']}" for a in anomalies])
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
         
-        prompt = f"""Analyze these business anomalies and provide a brief summary with prioritized recommendations:
-
-{anomaly_text}
-
-Return a short summary (3-4 sentences) focusing on the most critical issues and recommended actions."""
+        # Check if uploaded_data table exists
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+        uploaded_table_exists = cur.fetchone() is not None
         
-        ai_analysis = ask_groq(prompt)
+        if not uploaded_table_exists:
+            return {
+                "anomalies": [],
+                "message": "No anomalies detected. Upload data to begin analysis.",
+                "detected_at": datetime.now().isoformat(),
+                "total_count": 0,
+                "critical_count": 0
+            }
+        
+        # Check if table has any rows
+        cur.execute("SELECT COUNT(*) FROM uploaded_data")
+        row_count = cur.fetchone()[0]
+        
+        if row_count == 0:
+            return {
+                "anomalies": [],
+                "message": "No anomalies detected. Upload data to begin analysis.",
+                "detected_at": datetime.now().isoformat(),
+                "total_count": 0,
+                "critical_count": 0
+            }
+        
+        # Get column names from uploaded_data table
+        cur.execute("PRAGMA table_info(uploaded_data)")
+        columns_info = cur.fetchall()
+        columns = [col[1] for col in columns_info]
+        
+        # Get first 10 rows of data
+        cur.execute("SELECT * FROM uploaded_data LIMIT 10")
+        sample_rows = cur.fetchall()
+        sample_data = [dict(row) for row in sample_rows]
+    finally:
+        if conn:
+            conn.close()
+    
+    # Use Groq AI to analyze the data and detect anomalies
+    if groq_client:
+        columns_str = ", ".join(columns)
+        sample_data_str = "\n".join([str(row) for row in sample_data])
+        
+        prompt = f"""You are a business analyst. Analyze this CSV data and find 3-4 important anomalies, risks or insights. 
+Columns: {columns_str}
+Sample data: {sample_data_str}
+Return ONLY a JSON array of anomalies, no other text. Each anomaly should have this format:
+[
+  {{
+    "type": "critical|warning|info",
+    "title": "Short title",
+    "description": "Detailed description",
+    "metric": "Key metric value"
+  }}
+]"""
+        
+        try:
+            response = ask_groq(prompt)
+            
+            # Parse JSON from response
+            json_match = re.search(r'\[.*\]', response, re.DOTALL)
+            if json_match:
+                anomalies = json.loads(json_match.group())
+            else:
+                anomalies = []
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"Error parsing AI response: {e}")
+            anomalies = []
+        
+        if not anomalies:
+            return {
+                "anomalies": [],
+                "message": "No anomalies detected. Upload data to begin analysis.",
+                "detected_at": datetime.now().isoformat(),
+                "total_count": 0,
+                "critical_count": 0
+            }
+        
+        return {
+            "anomalies": anomalies,
+            "detected_at": datetime.now().isoformat(),
+            "total_count": len(anomalies),
+            "critical_count": len([a for a in anomalies if a.get("type") == "critical"])
+        }
     else:
-        ai_analysis = "No AI analysis available. Review the anomalies manually."
-    
-    return {
-        "anomalies": anomalies,
-        "ai_analysis": ai_analysis,
-        "detected_at": datetime.now().isoformat(),
-        "total_count": len(anomalies),
-        "critical_count": len([a for a in anomalies if a["type"] == "critical"])
-    }
+        return {
+            "anomalies": [],
+            "message": "No anomalies detected. Upload data to begin analysis.",
+            "detected_at": datetime.now().isoformat(),
+            "total_count": 0,
+            "critical_count": 0
+        }
 
 
 @app.get("/clients")
 def get_clients():
     """Get all clients"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    cur.execute("SELECT id, name, plan, country, joined_date FROM clients")
-    clients = cur.fetchall()
-    conn.close()
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        cur.execute("SELECT id, name, plan, country, joined_date FROM clients")
+        clients = cur.fetchall()
+    finally:
+        if conn:
+            conn.close()
     
     return [
         {
@@ -550,18 +506,24 @@ def get_clients():
 @app.get("/revenue/summary")
 def get_revenue_summary():
     """Get revenue summary by plan"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    cur.execute("""
-        SELECT c.plan, SUM(r.amount) as total_revenue, COUNT(c.id) as client_count
-        FROM clients c
-        JOIN revenue r ON c.id = r.client_id
-        GROUP BY c.plan
-    """)
-    result = cur.fetchall()
-    conn.close()
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT c.plan, SUM(r.amount) as total_revenue, COUNT(c.id) as client_count
+            FROM clients c
+            JOIN revenue r ON c.id = r.client_id
+            GROUP BY c.plan
+        """)
+        result = cur.fetchall()
+    finally:
+        if conn:
+            conn.close()
     
     return [
         {
@@ -598,27 +560,32 @@ async def upload_csv(file: UploadFile = File(...)):
         df.columns = [col.strip().replace(' ', '_').replace('-', '_') for col in df.columns]
         
         # Drop existing uploaded_data table and recreate
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("DROP TABLE IF EXISTS uploaded_data")
-        
-        # Store in SQLite
-        df.to_sql('uploaded_data', conn, if_exists='fail', index=False)
-        conn.commit()
-        
-        # Get preview (first 5 rows)
-        preview_df = df.head(5)
-        preview = preview_df.to_dict(orient='records')
-        
-        # Convert any non-serializable types
-        for row in preview:
-            for key, value in row.items():
-                if pd.isna(value):
-                    row[key] = None
-                elif isinstance(value, (pd.Timestamp, datetime)):
-                    row[key] = str(value)
-        
-        conn.close()
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=10000")
+            cur = conn.cursor()
+            cur.execute("DROP TABLE IF EXISTS uploaded_data")
+            
+            # Store in SQLite
+            df.to_sql('uploaded_data', conn, if_exists='fail', index=False)
+            conn.commit()
+            
+            # Get preview (first 5 rows)
+            preview_df = df.head(5)
+            preview = preview_df.to_dict(orient='records')
+            
+            # Convert any non-serializable types
+            for row in preview:
+                for key, value in row.items():
+                    if pd.isna(value):
+                        row[key] = None
+                    elif isinstance(value, (pd.Timestamp, datetime)):
+                        row[key] = str(value)
+        finally:
+            if conn:
+                conn.close()
         
         return CSVUploadResponse(
             columns=list(df.columns),
@@ -637,25 +604,29 @@ def ask_csv_question(request: QuestionRequest):
     Convert natural language question to SQL query on uploaded CSV data
     """
     # Check if uploaded_data table exists
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
-    if not cur.fetchone():
-        conn.close()
-        raise HTTPException(status_code=400, detail="No CSV data uploaded. Please upload a CSV file first.")
-    
-    # Get schema info from uploaded_data
-    cur.execute("PRAGMA table_info(uploaded_data)")
-    columns_info = cur.fetchall()
-    columns = [(col[1], col[2]) for col in columns_info]  # (name, type)
-    
-    # Get sample data for context
-    cur.execute("SELECT * FROM uploaded_data LIMIT 3")
-    sample_rows = cur.fetchall()
-    column_names = [desc[0] for desc in cur.description]
-    
-    conn.close()
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        cur = conn.cursor()
+        
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+        if not cur.fetchone():
+            raise HTTPException(status_code=400, detail="No CSV data uploaded. Please upload a CSV file first.")
+        
+        # Get schema info from uploaded_data
+        cur.execute("PRAGMA table_info(uploaded_data)")
+        columns_info = cur.fetchall()
+        columns = [(col[1], col[2]) for col in columns_info]  # (name, type)
+        
+        # Get sample data for context
+        cur.execute("SELECT * FROM uploaded_data LIMIT 3")
+        sample_rows = cur.fetchall()
+        column_names = [desc[0] for desc in cur.description]
+    finally:
+        if conn:
+            conn.close()
     
     # Build schema info for AI
     schema_info = f"""
@@ -720,16 +691,20 @@ def ask_csv_question(request: QuestionRequest):
     rows = []
     columns = []
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute(sql_query)
         rows = [dict(r) for r in cur.fetchall()]
         if rows:
             columns = list(rows[0].keys())
-        conn.close()
     except Exception as e:
         insight = f"Error executing query: {str(e)}. Please rephrase your question."
+    finally:
+        if conn:
+            conn.close()
     
     # Determine chart type
     chart_type = determine_chart_type(rows, columns)
@@ -774,35 +749,58 @@ def ask_csv_question(request: QuestionRequest):
 @app.get("/csv-status")
 def get_csv_status():
     """Check if CSV data has been uploaded"""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        cur = conn.cursor()
+        
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+        exists = cur.fetchone() is not None
+        
+        if exists:
+            cur.execute("SELECT COUNT(*) FROM uploaded_data")
+            row_count = cur.fetchone()[0]
+            
+            cur.execute("PRAGMA table_info(uploaded_data)")
+            columns = [(col[1], col[2]) for col in cur.fetchall()]
+            
+            cur.execute("SELECT * FROM uploaded_data LIMIT 5")
+            preview_rows = cur.fetchall()
+            column_names = [desc[0] for desc in cur.description]
+            preview = [dict(zip(column_names, row)) for row in preview_rows]
+            
+            return {
+                "uploaded": True,
+                "row_count": row_count,
+                "columns": [{"name": col[0], "type": col[1]} for col in columns],
+                "preview": preview
+            }
+        
+        return {"uploaded": False}
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.delete("/clear-csv")
+def clear_csv_data():
+    """Clear uploaded CSV data by dropping the uploaded_data table"""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        cur = conn.cursor()
+        
+        cur.execute("DROP TABLE IF EXISTS uploaded_data")
+        conn.commit()
+    finally:
+        if conn:
+            conn.close()
     
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
-    exists = cur.fetchone() is not None
-    
-    if exists:
-        cur.execute("SELECT COUNT(*) FROM uploaded_data")
-        row_count = cur.fetchone()[0]
-        
-        cur.execute("PRAGMA table_info(uploaded_data)")
-        columns = [(col[1], col[2]) for col in cur.fetchall()]
-        
-        cur.execute("SELECT * FROM uploaded_data LIMIT 5")
-        preview_rows = cur.fetchall()
-        column_names = [desc[0] for desc in cur.description]
-        preview = [dict(zip(column_names, row)) for row in preview_rows]
-        
-        conn.close()
-        
-        return {
-            "uploaded": True,
-            "row_count": row_count,
-            "columns": [{"name": col[0], "type": col[1]} for col in columns],
-            "preview": preview
-        }
-    
-    conn.close()
-    return {"uploaded": False}
+    return {"success": True, "message": "Data cleared"}
 
 
 if __name__ == "__main__":

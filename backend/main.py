@@ -384,33 +384,21 @@ def detect_anomalies():
         uploaded_table_exists = cur.fetchone() is not None
         
         if not uploaded_table_exists:
-            return {
-                "anomalies": [],
-                "message": "No anomalies detected. Upload data to begin analysis.",
-                "detected_at": datetime.now().isoformat(),
-                "total_count": 0,
-                "critical_count": 0
-            }
+            return {"anomalies": [], "total_count": 0}
         
         # Check if table has any rows
         cur.execute("SELECT COUNT(*) FROM uploaded_data")
         row_count = cur.fetchone()[0]
         
         if row_count == 0:
-            return {
-                "anomalies": [],
-                "message": "No anomalies detected. Upload data to begin analysis.",
-                "detected_at": datetime.now().isoformat(),
-                "total_count": 0,
-                "critical_count": 0
-            }
+            return {"anomalies": [], "total_count": 0}
         
-        # Get column names from uploaded_data table
+        # Get columns: PRAGMA table_info(uploaded_data)
         cur.execute("PRAGMA table_info(uploaded_data)")
         columns_info = cur.fetchall()
         columns = [col[1] for col in columns_info]
         
-        # Get first 10 rows of data
+        # Get data: SELECT * FROM uploaded_data LIMIT 10
         cur.execute("SELECT * FROM uploaded_data LIMIT 10")
         sample_rows = cur.fetchall()
         sample_data = [dict(row) for row in sample_rows]
@@ -418,28 +406,17 @@ def detect_anomalies():
         if conn:
             conn.close()
     
-    # Use Groq AI to analyze the data and detect anomalies
+    # Call Groq with the specified prompt
     if groq_client:
-        columns_str = ", ".join(columns)
-        sample_data_str = "\n".join([str(row) for row in sample_data])
+        cols_str = ", ".join(columns)
+        data_str = "\n".join([str(row) for row in sample_data])
         
-        prompt = f"""You are a business analyst. Analyze this CSV data and find 3-4 important anomalies, risks or insights. 
-Columns: {columns_str}
-Sample data: {sample_data_str}
-Return ONLY a JSON array of anomalies, no other text. Each anomaly should have this format:
-[
-  {{
-    "type": "critical|warning|info",
-    "title": "Short title",
-    "description": "Detailed description",
-    "metric": "Key metric value"
-  }}
-]"""
+        prompt = f"""Analyze this business data and return ONLY a JSON array of 3-4 anomalies. No other text. Format: [{{"type":"critical|warning|info","title":"title","description":"desc","metric":"metric"}}]. Columns: {cols_str}. Data: {data_str}"""
         
         try:
             response = ask_groq(prompt)
             
-            # Parse JSON from response
+            # Parse and return the JSON array
             json_match = re.search(r'\[.*\]', response, re.DOTALL)
             if json_match:
                 anomalies = json.loads(json_match.group())
@@ -449,29 +426,9 @@ Return ONLY a JSON array of anomalies, no other text. Each anomaly should have t
             print(f"Error parsing AI response: {e}")
             anomalies = []
         
-        if not anomalies:
-            return {
-                "anomalies": [],
-                "message": "No anomalies detected. Upload data to begin analysis.",
-                "detected_at": datetime.now().isoformat(),
-                "total_count": 0,
-                "critical_count": 0
-            }
-        
-        return {
-            "anomalies": anomalies,
-            "detected_at": datetime.now().isoformat(),
-            "total_count": len(anomalies),
-            "critical_count": len([a for a in anomalies if a.get("type") == "critical"])
-        }
+        return {"anomalies": anomalies, "total_count": len(anomalies)}
     else:
-        return {
-            "anomalies": [],
-            "message": "No anomalies detected. Upload data to begin analysis.",
-            "detected_at": datetime.now().isoformat(),
-            "total_count": 0,
-            "critical_count": 0
-        }
+        return {"anomalies": [], "total_count": 0}
 
 
 @app.get("/clients")
@@ -801,6 +758,25 @@ def clear_csv_data():
             conn.close()
     
     return {"success": True, "message": "Data cleared"}
+
+
+@app.delete("/clear-data")
+def clear_data():
+    """Clear all rows from uploaded_data table"""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        cur = conn.cursor()
+        
+        cur.execute("DELETE FROM uploaded_data")
+        conn.commit()
+    finally:
+        if conn:
+            conn.close()
+    
+    return {"success": True}
 
 
 if __name__ == "__main__":

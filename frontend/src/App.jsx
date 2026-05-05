@@ -379,6 +379,9 @@ function App() {
       setCsvColumns(data.columns)
       setCsvQueryResult(null)
       setCsvRecentQueries([])
+
+      // After successful CSV upload, automatically call fetchAnomalies()
+      fetchAnomalies()
     } catch (err) {
       console.error('Error uploading file:', err)
       setCsvError(err.message || 'Failed to upload file')
@@ -424,21 +427,23 @@ function App() {
     }
   }
 
-  // Clear CSV data (calls backend to drop table)
+  // Clear Data button handler - calls DELETE /clear-data API
   const clearCsvData = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/clear-csv`, {
+      const response = await fetch(`${API_BASE_URL}/clear-data`, {
         method: 'DELETE'
       })
       if (response.ok) {
+        // Set anomalies to []
+        setAnomalies([])
+        setAiAnalysis('')
+        // Clear csv preview state
         setCsvData(null)
         setCsvPreview(null)
         setCsvColumns([])
         setCsvQueryResult(null)
         setCsvRecentQueries([])
         setCsvError(null)
-        setAnomalies([])
-        setAiAnalysis('')
         if (fileInputRef.current) {
           fileInputRef.current.value = ''
         }
@@ -446,14 +451,14 @@ function App() {
     } catch (err) {
       console.error('Error clearing data:', err)
       // Still reset local state even if backend call fails
+      setAnomalies([])
+      setAiAnalysis('')
       setCsvData(null)
       setCsvPreview(null)
       setCsvColumns([])
       setCsvQueryResult(null)
       setCsvRecentQueries([])
       setCsvError(null)
-      setAnomalies([])
-      setAiAnalysis('')
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
@@ -501,45 +506,50 @@ function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Anomaly Banner */}
-        <section className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <AlertTriangle className="w-5 h-5 text-yellow-500" />
-            <h2 className="text-lg font-semibold text-gray-200">AI-Detected Anomalies</h2>
-            {anomalies.length > 0 && (
+        {/* Anomaly Banner - Show ONLY when anomalies.length > 0 */}
+        {anomalies.length > 0 && (
+          <section className="mb-8">
+            <div className="flex items-center gap-2 mb-4">
+              <AlertTriangle className="w-5 h-5 text-yellow-500" />
+              <h2 className="text-lg font-semibold text-gray-200">AI-Detected Anomalies</h2>
               <span className="ml-2 px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded-full">
                 {anomalies.filter(a => a.type === 'critical').length} Critical
               </span>
-            )}
-          </div>
+            </div>
 
-          {loading.anomalies ? (
-            <div className="flex items-center justify-center h-24">
-              <div className="spinner" />
-            </div>
-          ) : anomalies.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {anomalies.map((anomaly, index) => (
-                <AnomalyCard key={index} anomaly={anomaly} index={index} />
-              ))}
-            </div>
-          ) : (
+            {loading.anomalies ? (
+              <div className="flex items-center justify-center h-24">
+                <div className="spinner" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {anomalies.map((anomaly, index) => (
+                  <AnomalyCard key={index} anomaly={anomaly} index={index} />
+                ))}
+              </div>
+            )}
+
+            {aiAnalysis && (
+              <div className="mt-4 glass rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Bot className="w-4 h-4 text-primary" />
+                  <p className="text-xs text-gray-500 font-medium">AI Analysis</p>
+                </div>
+                <p className="text-sm text-gray-300">{aiAnalysis}</p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Show message when no anomalies */}
+        {anomalies.length === 0 && !loading.anomalies && (
+          <section className="mb-8">
             <div className="glass rounded-xl p-6 text-center text-gray-500">
               <Info className="w-8 h-8 mx-auto mb-2 text-gray-600" />
-              <p>Upload your data to see AI-detected anomalies</p>
+              <p>Upload a CSV file to detect anomalies</p>
             </div>
-          )}
-
-          {aiAnalysis && (
-            <div className="mt-4 glass rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Bot className="w-4 h-4 text-primary" />
-                <p className="text-xs text-gray-500 font-medium">AI Analysis</p>
-              </div>
-              <p className="text-sm text-gray-300">{aiAnalysis}</p>
-            </div>
-          )}
-        </section>
+          </section>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Main Content - Chat Section */}

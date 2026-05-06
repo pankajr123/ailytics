@@ -151,6 +151,107 @@ def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
+@app.get("/stats")
+def get_stats():
+    """
+    Get quick stats from uploaded_data table:
+    - total_revenue: Sum of revenue/amount/monthly_revenue column
+    - active_clients: Count of unique clients (from client/name column)
+    - growth_rate: N/A (not calculable without time series data)
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        # Check if uploaded_data table exists
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+        table_exists = cur.fetchone() is not None
+
+        if not table_exists:
+            return {
+                "total_revenue": 0,
+                "active_clients": 0,
+                "growth_rate": "N/A"
+            }
+
+        # Check if table has any rows
+        cur.execute("SELECT COUNT(*) FROM uploaded_data")
+        row_count = cur.fetchone()[0]
+
+        if row_count == 0:
+            return {
+                "total_revenue": 0,
+                "active_clients": 0,
+                "growth_rate": "N/A"
+            }
+
+        # Get column names
+        cur.execute("PRAGMA table_info(uploaded_data)")
+        columns_info = cur.fetchall()
+        columns = [col[1].lower() for col in columns_info]
+
+        # Try to find revenue column
+        revenue_keywords = ['revenue', 'amount', 'monthly_revenue', 'sales', 'total', 'price']
+        revenue_column = None
+        for col in columns:
+            for keyword in revenue_keywords:
+                if keyword in col:
+                    revenue_column = col
+                    break
+            if revenue_column:
+                break
+
+        # Try to find client column
+        client_keywords = ['client', 'name', 'customer', 'company', 'account']
+        client_column = None
+        for col in columns:
+            for keyword in client_keywords:
+                if keyword in col:
+                    client_column = col
+                    break
+            if client_column:
+                break
+
+        # Calculate total revenue
+        total_revenue = 0
+        if revenue_column:
+            cur.execute(f'SELECT SUM("{revenue_column}") FROM uploaded_data')
+            result = cur.fetchone()
+            if result and result[0] is not None:
+                total_revenue = round(float(result[0]), 2)
+
+        # Calculate active clients count
+        active_clients = 0
+        if client_column:
+            cur.execute(f'SELECT COUNT(DISTINCT "{client_column}") FROM uploaded_data')
+            result = cur.fetchone()
+            if result and result[0] is not None:
+                active_clients = int(result[0])
+        else:
+            # If no client column, count total rows as active clients
+            active_clients = row_count
+
+        return {
+            "total_revenue": total_revenue,
+            "active_clients": active_clients,
+            "growth_rate": "N/A"
+        }
+
+    except Exception as e:
+        return {
+            "total_revenue": 0,
+            "active_clients": 0,
+            "growth_rate": "N/A"
+        }
+    finally:
+        if conn:
+            conn.close()
+
+
 @app.post("/ask", response_model=AIResponse)
 def ask_question(request: QuestionRequest):
     """

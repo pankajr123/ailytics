@@ -269,13 +269,30 @@ function App() {
   const [csvError, setCsvError] = useState(null)
   const [activeTab, setActiveTab] = useState('demo') // 'demo' or 'upload'
 
+  // Quick Stats state
+  const [quickStats, setQuickStats] = useState({ total_revenue: 0, active_clients: 0, growth_rate: 'N/A' })
+  const [statsLoading, setStatsLoading] = useState(true)
+
+  const fetchQuickStats = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/stats`)
+      const data = await response.json()
+      setQuickStats(data)
+    } catch (err) {
+      console.error('Error fetching stats:', err)
+      setQuickStats({ total_revenue: 0, active_clients: 0, growth_rate: 'N/A' })
+    } finally {
+      setStatsLoading(false)
+    }
+  }
+
   const fetchAnomalies = async () => {
     setLoading(prev => ({ ...prev, anomalies: true }))
     try {
       const response = await fetch(`${API_BASE_URL}/anomalies`)
       const data = await response.json()
       setAnomalies(data.anomalies || [])
-      setAiAnalysis(data.ai_analysis || '')
+      setAiAnalysis(data.aiAnalysis || '')
     } catch (err) {
       console.error('Error fetching anomalies:', err)
       setError('Failed to load anomalies')
@@ -345,6 +362,11 @@ function App() {
     "What is the total count by group?",
     "Show me trends over time"
   ]
+
+  // Fetch quick stats on mount
+  useEffect(() => {
+    fetchQuickStats()
+  }, [])
 
   // CSV Upload handler
   const handleFileUpload = async (e) => {
@@ -658,7 +680,15 @@ function App() {
                     </div>
                     <span className="text-sm text-gray-400">Total Revenue</span>
                   </div>
-                  <span className="text-sm font-medium text-gray-200">Loading...</span>
+                  <span className="text-sm font-medium text-gray-200">
+                    {statsLoading ? (
+                      <span className="text-gray-500">...</span>
+                    ) : quickStats.total_revenue === 0 ? (
+                      <span className="text-gray-500 text-xs">Upload data to see stats</span>
+                    ) : (
+                      `$${quickStats.total_revenue.toLocaleString()}`
+                    )}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between p-3 bg-background-secondary rounded-lg">
                   <div className="flex items-center gap-3">
@@ -667,7 +697,15 @@ function App() {
                     </div>
                     <span className="text-sm text-gray-400">Active Clients</span>
                   </div>
-                  <span className="text-sm font-medium text-gray-200">Loading...</span>
+                  <span className="text-sm font-medium text-gray-200">
+                    {statsLoading ? (
+                      <span className="text-gray-500">...</span>
+                    ) : quickStats.active_clients === 0 ? (
+                      <span className="text-gray-500 text-xs">Upload data to see stats</span>
+                    ) : (
+                      quickStats.active_clients
+                    )}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between p-3 bg-background-secondary rounded-lg">
                   <div className="flex items-center gap-3">
@@ -676,7 +714,13 @@ function App() {
                     </div>
                     <span className="text-sm text-gray-400">Growth Rate</span>
                   </div>
-                  <span className="text-sm font-medium text-gray-200">Loading...</span>
+                  <span className="text-sm font-medium text-gray-200">
+                    {statsLoading ? (
+                      <span className="text-gray-500">...</span>
+                    ) : (
+                      quickStats.growth_rate
+                    )}
+                  </span>
                 </div>
               </div>
             </section>

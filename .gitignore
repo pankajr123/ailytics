@@ -1,1 +1,53 @@
-backend/.env
+
+# -------------------------
+# Python
+# -------------------------
+backend/venv/
+backend/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# -------------------------
+# SQLite DB Runtime Files
+# -------------------------
+backend/*.db-shm
+backend/*.db-wal
+
+# Optional:
+# Ignore DB completely if you don't want DB in git
+# backend/*.db
+
+# -------------------------
+# Node Modules
+# -------------------------
+frontend/node_modules/
+
+# -------------------------
+# Vite Cache
+# -------------------------
+frontend/node_modules/.vite/
+
+# -------------------------
+# Logs
+# -------------------------
+*.log
+
+# -------------------------
+# Environment Files
+# -------------------------
+.env
+.env.local
+.env.*.local
+
+# -------------------------
+# OS Files
+# -------------------------
+.DS_Store
+Thumbs.db
+
+# -------------------------
+# Backup Files
+# -------------------------
+*_old.*
+*backup*

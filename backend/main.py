@@ -256,22 +256,53 @@ def get_stats():
 def ask_question(request: QuestionRequest):
     """
     Convert natural language question to SQL, execute it, and return insights
+    Uses uploaded_data table only.
     """
-    # Get database schema info for the AI
-    schema_info = """
-    Database Schema:
-    - clients: id, name, plan (Starter/Pro/Enterprise), country, joined_date
-    - revenue: id, client_id, amount, month (YYYY-MM format), status (paid/unpaid)
-    - support_tickets: id, client_id, issue, priority (High/Medium/Low), status (open/in_progress/resolved/closed), created_at
-    - usage_logs: id, client_id, feature, usage_count, month (YYYY-MM format)
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        # Check if uploaded_data table exists
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+        if not cur.fetchone():
+            # Return error response if table doesn't exist
+            return AIResponse(
+                sql="SELECT 1",
+                chart_type="bar",
+                insight="No CSV data uploaded. Please upload a CSV file first using the upload feature.",
+                data={"labels": [], "values": [], "raw_data": []}
+            )
+        
+        # Get columns from uploaded_data: PRAGMA table_info(uploaded_data)
+        cur.execute("PRAGMA table_info(uploaded_data)")
+        columns_info = cur.fetchall()
+        column_names = [col[1] for col in columns_info]
+        
+        # Get 3 sample rows: SELECT * FROM uploaded_data LIMIT 3
+        cur.execute("SELECT * FROM uploaded_data LIMIT 3")
+        sample_rows = cur.fetchall()
+        sample_data = [dict(row) for row in sample_rows]
+    finally:
+        if conn:
+            conn.close()
+    
+    # Build schema_info dynamically from these columns
+    schema_info = f"""
+    Database Schema (table: uploaded_data):
+    Columns: {', '.join(column_names)}
+    
+    Sample data:
+    {chr(10).join([str(row) for row in sample_data])}
     
     Example questions you can answer:
-    - "What is the total revenue by plan type?"
-    - "Show me monthly revenue trends"
-    - "Which clients have the most support tickets?"
-    - "What are the most used features?"
-    - "How many enterprise clients do we have by country?"
-    - "What is the average revenue per client?"
+    - "Show me top 5 rows"
+    - "What are the column names?"
+    - "Show me summary statistics"
+    - "What is the count by {column_names[0] if column_names else 'column'}?"
     """
     
     system_prompt = """You are a SQL expert that converts natural language questions into SQLite queries.
@@ -282,12 +313,12 @@ def ask_question(request: QuestionRequest):
     }
     
     Rules:
-    1. Only use the tables and columns mentioned in the schema
+    1. Only use the 'uploaded_data' table
     2. Use proper SQL syntax for SQLite
     3. Always include meaningful column aliases
-    4. For date comparisons, use the month column which is in YYYY-MM format
-    5. Keep queries simple and efficient
-    6. Do not include any markdown formatting in the JSON"""
+    4. Keep queries simple and efficient
+    5. Do not include any markdown formatting in the JSON
+    6. Use the exact column names from the schema"""
     
     prompt = f"""Based on the database schema below, convert this question into a SQL query:
     
@@ -309,7 +340,7 @@ def ask_question(request: QuestionRequest):
             ai_result = json.loads(response)
     except (json.JSONDecodeError, AttributeError):
         ai_result = {
-            "sql": "SELECT name, plan FROM clients LIMIT 10",
+            "sql": "SELECT * FROM uploaded_data LIMIT 10",
             "insight": "Could not parse the question. Here's a sample query."
         }
     
@@ -383,7 +414,7 @@ def ask_question(request: QuestionRequest):
 @app.get("/digest")
 def get_weekly_digest():
     """
-    Generate a weekly business health summary using AI
+    Generate a weekly business health summary using AI from uploaded_data table only.
     """
     conn = None
     try:
@@ -393,62 +424,130 @@ def get_weekly_digest():
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         
-        # Gather statistics using raw SQL
-        cur.execute("SELECT COUNT(*) FROM clients")
-        total_clients = cur.fetchone()[0]
+        # Check if uploaded_data exists and has rows
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaded_data'")
+        table_exists = cur.fetchone() is not None
         
-        cur.execute("SELECT plan, COUNT(*) FROM clients GROUP BY plan")
-        clients_by_plan = cur.fetchall()
+        if not table_exists:
+            return {
+                "digest": "No data uploaded yet. Please upload a CSV file to generate digest.",
+                "generated_at": datetime.now().isoformat(),
+                "stats": {
+                    "total_clients": 0,
+                    "total_revenue": 0,
+                    "unpaid_revenue": 0,
+                    "total_tickets": 0,
+                    "open_tickets": 0
+                }
+            }
         
-        cur.execute("SELECT SUM(amount) FROM revenue")
-        total_revenue = cur.fetchone()[0] or 0
+        # Check if table has any rows
+        cur.execute("SELECT COUNT(*) FROM uploaded_data")
+        row_count = cur.fetchone()[0]
         
-        cur.execute("SELECT month, SUM(amount) FROM revenue GROUP BY month ORDER BY month")
-        monthly_revenue = cur.fetchall()
+        if row_count == 0:
+            return {
+                "digest": "No data uploaded yet. Please upload a CSV file to generate digest.",
+                "generated_at": datetime.now().isoformat(),
+                "stats": {
+                    "total_clients": 0,
+                    "total_revenue": 0,
+                    "unpaid_revenue": 0,
+                    "total_tickets": 0,
+                    "open_tickets": 0
+                }
+            }
         
-        cur.execute("SELECT SUM(amount) FROM revenue WHERE status = 'unpaid'")
-        unpaid_revenue = cur.fetchone()[0] or 0
+        # Get all column names from uploaded_data
+        cur.execute("PRAGMA table_info(uploaded_data)")
+        columns_info = cur.fetchall()
+        column_names = [col[1] for col in columns_info]
         
-        cur.execute("SELECT COUNT(*) FROM support_tickets")
-        total_tickets = cur.fetchone()[0]
+        # Get all rows: SELECT * FROM uploaded_data
+        cur.execute("SELECT * FROM uploaded_data")
+        all_rows = cur.fetchall()
+        all_data = [dict(row) for row in all_rows]
         
-        cur.execute("SELECT priority, COUNT(*) FROM support_tickets GROUP BY priority")
-        tickets_by_priority = cur.fetchall()
+        # Calculate stats from uploaded_data dynamically
+        # Try to find revenue column
+        revenue_keywords = ['revenue', 'amount', 'monthly_revenue', 'sales', 'total', 'price']
+        revenue_column = None
+        for col in column_names:
+            for keyword in revenue_keywords:
+                if keyword in col.lower():
+                    revenue_column = col
+                    break
+            if revenue_column:
+                break
         
-        cur.execute("SELECT COUNT(*) FROM support_tickets WHERE status IN ('open', 'in_progress')")
-        open_tickets = cur.fetchone()[0]
+        # Try to find client column
+        client_keywords = ['client', 'name', 'customer', 'company', 'account']
+        client_column = None
+        for col in column_names:
+            for keyword in client_keywords:
+                if keyword in col.lower():
+                    client_column = col
+                    break
+            if client_column:
+                break
         
-        cur.execute("SELECT feature, SUM(usage_count) FROM usage_logs GROUP BY feature ORDER BY SUM(usage_count) DESC LIMIT 5")
-        top_features = cur.fetchall()
+        # Calculate total revenue
+        total_revenue = 0
+        if revenue_column:
+            cur.execute(f'SELECT SUM("{revenue_column}") FROM uploaded_data')
+            result = cur.fetchone()
+            if result and result[0] is not None:
+                total_revenue = round(float(result[0]), 2)
+        
+        # Calculate total clients (unique values in client column or total rows)
+        total_clients = 0
+        if client_column:
+            cur.execute(f'SELECT COUNT(DISTINCT "{client_column}") FROM uploaded_data')
+            result = cur.fetchone()
+            if result and result[0] is not None:
+                total_clients = int(result[0])
+        else:
+            total_clients = row_count
+        
+        # For unpaid revenue and tickets, we don't have specific columns
+        # so we'll let AI analyze the data to find these insights
+        unpaid_revenue = 0
+        total_tickets = 0
+        open_tickets = 0
+        
     finally:
         if conn:
             conn.close()
     
-    # Format stats for AI
+    # Format data for AI - send full data
+    data_str = "\n".join([str(row) for row in all_data[:100]])  # Limit to 100 rows for API
+    columns_str = ", ".join(column_names)
+    
     stats_text = f"""
-    Business Statistics:
-    - Total Clients: {total_clients}
-    - Clients by Plan: {', '.join([f'{row[0]}: {row[1]}' for row in clients_by_plan])}
-    - Total Revenue: ${total_revenue:,.2f}
-    - Monthly Revenue Trend: {', '.join([f'{row[0]}: ${row[1]:,.2f}' for row in monthly_revenue])}
-    - Unpaid Revenue: ${unpaid_revenue:,.2f}
-    - Total Support Tickets: {total_tickets}
-    - Tickets by Priority: {', '.join([f'{row[0]}: {row[1]}' for row in tickets_by_priority])}
-    - Open/In-Progress Tickets: {open_tickets}
-    - Top 5 Features by Usage: {', '.join([f'{row[0]}: {row[1]:,} uses' for row in top_features])}
+    Uploaded Data Statistics:
+    - Total Rows: {row_count}
+    - Columns: {columns_str}
+    - Total Clients/Entries: {total_clients}
+    - Total Revenue (if applicable): ${total_revenue:,.2f}
+    
+    Sample Data (first 5 rows):
+    {chr(10).join([str(row) for row in all_data[:5]])}
     """
     
-    system_prompt = """You are a business analyst AI assistant. Generate a comprehensive weekly business health digest."""
+    system_prompt = """You are a business analyst AI assistant. Generate a comprehensive weekly business health digest from the uploaded data."""
     
-    prompt = f"""Based on the following business statistics, generate a comprehensive weekly business health digest.
+    prompt = f"""Based on the following uploaded business data, generate a comprehensive weekly business health digest.
     Include:
     1. Executive Summary (2-3 sentences)
-    2. Revenue Analysis
-    3. Customer Insights
-    4. Support Overview
+    2. Key Metrics Analysis
+    3. Data Insights
+    4. Trends and Patterns
     5. Key Recommendations
     
     {stats_text}
+    
+    Full Data:
+    {data_str}
     
     Format the response in a professional, easy-to-read manner with clear sections."""
     
@@ -459,8 +558,8 @@ def get_weekly_digest():
         "generated_at": datetime.now().isoformat(),
         "stats": {
             "total_clients": total_clients,
-            "total_revenue": round(total_revenue, 2),
-            "unpaid_revenue": round(unpaid_revenue, 2),
+            "total_revenue": total_revenue,
+            "unpaid_revenue": unpaid_revenue,
             "total_tickets": total_tickets,
             "open_tickets": open_tickets
         }
@@ -714,7 +813,8 @@ def ask_csv_question(request: QuestionRequest):
     3. Always include meaningful column aliases
     4. Keep queries simple and efficient
     5. Do not include any markdown formatting in the JSON
-    6. Use the exact column names from the schema"""
+    6. Use the exact column names from the schema
+    7. Always include FROM uploaded_data in every query"""
     
     prompt = f"""Based on the uploaded CSV data schema below, convert this question into a SQL query:
     
@@ -744,6 +844,10 @@ def ask_csv_question(request: QuestionRequest):
     
     # Clean up SQL (remove markdown code blocks if present)
     sql_query = re.sub(r'```sql\s*|\s*```', '', sql_query).strip()
+    
+    # Fix: Add FROM uploaded_data if missing
+    if 'FROM' not in sql_query.upper():
+        sql_query = sql_query + ' FROM uploaded_data'
     
     # Execute the query
     rows = []
@@ -882,4 +986,4 @@ def clear_data():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8002)

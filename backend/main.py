@@ -975,7 +975,7 @@ def clear_data():
         conn.execute("PRAGMA busy_timeout=10000")
         cur = conn.cursor()
         
-        cur.execute("DELETE FROM uploaded_data")
+        cur.execute("DROP TABLE IF EXISTS uploaded_data")
         conn.commit()
     finally:
         if conn:

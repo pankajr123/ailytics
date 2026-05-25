@@ -933,6 +933,8 @@ def get_csv_status():
             column_names = [desc[0] for desc in cur.description]
             preview = [dict(zip(column_names, row)) for row in preview_rows]
             
+            if row_count == 0:
+                return {"uploaded": False}
             return {
                 "uploaded": True,
                 "row_count": row_count,
@@ -968,20 +970,25 @@ def clear_csv_data():
 @app.delete("/clear-data")
 def clear_data():
     """Clear all rows from uploaded_data table"""
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=10000")
-        cur = conn.cursor()
-        
-        cur.execute("DELETE FROM uploaded_data")
-        conn.commit()
-    finally:
-        if conn:
-            conn.close()
-    
-    return {"success": True}
+    import time
+    last_error = None
+    for attempt in range(5):
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=60, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            cur = conn.cursor()
+            cur.execute("DELETE FROM uploaded_data")
+            conn.commit()
+            return {"success": True}
+        except sqlite3.OperationalError as e:
+            last_error = str(e)
+            time.sleep(1)
+        finally:
+            if conn:
+                conn.close()
+    return {"success": False, "error": last_error}
 
 
 if __name__ == "__main__":

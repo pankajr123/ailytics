@@ -1,4 +1,4 @@
-# SaaS Co-Pilot - AI-Powered Business Analyst Dashboard
+# SaaS Co-Pilot - AI Data Co-Pilot Dashboard
 
 A modern, AI-powered business intelligence dashboard that allows you to ask natural language questions about your SaaS business data and get instant insights with auto-generated charts.
 

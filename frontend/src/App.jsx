@@ -436,7 +436,7 @@ function App() {
               </div>
               <div>
                 <h1 className="text-lg font-bold text-gray-100">AILytics</h1>
-                <p className="text-xs text-gray-500">AI-Powered Business Analyst</p>
+                <p className="text-xs text-gray-500">AI Data Co-Pilot</p>
               </div>
             </div>
             <div className="flex items-center gap-3">

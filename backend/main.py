@@ -309,7 +309,7 @@ def ask_question(request: QuestionRequest):
     Return your response in the following JSON format:
     {
         "sql": "SELECT ...",
-        "insight": "Brief insight about what this query shows (2-3 sentences)"
+        "insight": "Direct answer to the user question based on query results in 2-3 sentences"
     }
     
     Rules:
@@ -326,7 +326,7 @@ def ask_question(request: QuestionRequest):
     
     {schema_info}
     
-    Return only valid JSON with 'sql' and 'insight' keys."""
+    Return only valid JSON with 'sql' and 'insight' keys. The insight must directly answer the question asked, like 'The total revenue is $X' or 'Client Y has the highest tickets'. Start with the actual answer."""
     
     response = ask_groq(prompt, system_prompt)
     
@@ -723,10 +723,10 @@ async def upload_csv(file: UploadFile = File(...)):
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=10000")
             cur = conn.cursor()
-            cur.execute("DROP TABLE IF EXISTS uploaded_data")
+            cur.execute("DELETE FROM uploaded_data")
             
             # Store in SQLite
-            df.to_sql('uploaded_data', conn, if_exists='fail', index=False)
+            df.to_sql('uploaded_data', conn, if_exists='replace', index=False)
             conn.commit()
             
             # Get preview (first 5 rows)
@@ -804,7 +804,7 @@ def ask_csv_question(request: QuestionRequest):
     Return your response in the following JSON format:
     {
         "sql": "SELECT ...",
-        "insight": "Brief insight about what this query shows (2-3 sentences)"
+        "insight": "Direct answer to the user question based on query results in 2-3 sentences"
     }
     
     Rules:
@@ -822,7 +822,7 @@ def ask_csv_question(request: QuestionRequest):
     
     {schema_info}
     
-    Return only valid JSON with 'sql' and 'insight' keys."""
+    Return only valid JSON with 'sql' and 'insight' keys. The insight must directly answer the question asked, like 'The total revenue is $X' or 'Client Y has the highest tickets'. Start with the actual answer."""
     
     response = ask_groq(prompt, system_prompt)
     
@@ -956,7 +956,7 @@ def clear_csv_data():
         conn.execute("PRAGMA busy_timeout=10000")
         cur = conn.cursor()
         
-        cur.execute("DROP TABLE IF EXISTS uploaded_data")
+        cur.execute("DELETE FROM uploaded_data")
         conn.commit()
     finally:
         if conn:
@@ -975,7 +975,7 @@ def clear_data():
         conn.execute("PRAGMA busy_timeout=10000")
         cur = conn.cursor()
         
-        cur.execute("DROP TABLE IF EXISTS uploaded_data")
+        cur.execute("DELETE FROM uploaded_data")
         conn.commit()
     finally:
         if conn:
